@@ -1,5 +1,4 @@
-Odin Tools for Torn.com
-Tampermonkey userscript for Torn.com players, helping with faction management, target tracking, and chain alerts. Bring the wisdom of Odin to your gameplay and lead your faction to victory.
+Odin tools is a script for Torn.com made to assist players, help with faction management, target tracking, and chain alerts. Bring the wisdom of Odin to your gameplay and lead your faction to victory.
 Version: 2.0
 Author: BjornOdinsson89
 License: All Rights Reserved (Proprietary) – Contact for usage rights.
