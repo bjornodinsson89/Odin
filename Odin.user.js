@@ -85,10 +85,7 @@ async function setToDB(storeName, key, value) {
         GM_notification("Storage full - attempting to clear cache.");
         try {
           await clearStore('cache');
-          // PATCH: Create a new transaction for retry to avoid TransactionInactiveError
-          const retryTx = db.transaction([storeName], "readwrite");
-          const retryStore = retryTx.objectStore(storeName);
-          const retryRequest = retryStore.put({ key, value });
+          const retryRequest = store.put({ key, value });
           await new Promise((res, rej) => {
             retryRequest.onsuccess = () => res();
             retryRequest.onerror = (e) => rej(e);
@@ -99,10 +96,7 @@ async function setToDB(storeName, key, value) {
             GM_notification("Storage still full - clearing all stores.");
             try {
               await clearAllStores();
-              // PATCH: New transaction for final retry
-              const finalTx = db.transaction([storeName], "readwrite");
-              const finalStore = finalTx.objectStore(storeName);
-              const finalRetry = finalStore.put({ key, value });
+              const finalRetry = store.put({ key, value });
               await new Promise((res, rej) => {
                 finalRetry.onsuccess = () => res();
                 finalRetry.onerror = (e) => rej(e);
@@ -469,8 +463,6 @@ styleElement.textContent = `
     color: var(--neon-color);
     text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     font-weight: 700;
-    padding-top: 4px; /* PATCH: Added for better sticky overlap prevention */
-    z-index: 11;
   }
 
   #tct-clock {
@@ -882,16 +874,6 @@ styleElement.textContent = `
     height: 38px;
     border-radius: 0;
     object-fit: contain;
-  }
-
-  /* PATCH: Added aria-live for countdown accessibility */
-  .countdown {
-    aria-live: polite;
-  }
-
-  /* PATCH: Added role for tables */
-  #odin-overlay table {
-    role: table;
   }
 `;
 document.head.appendChild(styleElement);
@@ -1406,21 +1388,6 @@ class OdinLogic extends BaseModule {
     this.isPageVisible = !document.hidden;
     document.addEventListener('visibilitychange', () => {
       this.isPageVisible = !document.hidden;
-      // PATCH: Clear intervals when hidden to save performance
-      if (document.hidden) {
-        Object.keys(this.intervals).forEach(key => {
-          if (this.intervals[key]) clearInterval(this.intervals[key]);
-        });
-        if (this.membersInterval) clearInterval(this.membersInterval);
-        if (this.enemyInterval) clearInterval(this.enemyInterval);
-        if (this.targetsInterval) clearInterval(this.targetsInterval);
-        if (this.warTargetsInterval) clearInterval(this.warTargetsInterval);
-      } else {
-        // Restart on visible
-        this.startMembersPoll();
-        this.startEnemyPoll();
-        // ... other restarts as needed
-      }
     });
     this.intervals.background = setInterval(() => this.backgroundRefresh(), 300000);
     this.intervals.userRefresh = setInterval(() => this.refreshUser(), 600000);
@@ -1928,11 +1895,6 @@ class OdinLogic extends BaseModule {
   }
 
   async fetchEnemyFromWar() {
-    // PATCH: Added check for factionless user
-    if (!this.user || !this.user.factionID) {
-      console.warn('User has no faction; skipping enemy war fetch.');
-      return;
-    }
     try {
       await this.fetchRankedWars();
       const enemyPromises = [];
@@ -2120,39 +2082,29 @@ class OdinLogic extends BaseModule {
 
   async watchChain(isFast = false) {
     if (!this.isPageVisible) return;
-    // PATCH: Added retry logic before resetting state on error
-    let retries = 0;
-    const maxRetries = 3;
-    let json;
-    while (retries < maxRetries) {
-      try {
-        json = await this.api('/faction?selections=chain', 0);
-        if (!json.error && json.chain) {
-          const prevCurrent = this.chainCurrent;
-          this.chainCurrent = json.chain.current || 0;
-          this.chainMax = json.chain.max || 0;
-          this.chainTimeout = json.chain.timeout || 0;
-          this.checkChainBonuses(prevCurrent);
-          return; // Success, exit loop
-        }
-        // If error but not transient, break
-        if (json?.error?.code === 2) break; // Invalid key, don't retry
-      } catch (e) {
-        console.error('Chain fetch error (attempt ' + (retries + 1) + '):', e);
-        OdinState.logError(e);
+    try {
+      const json = await this.api('/faction?selections=chain', 0);
+      if (!json.error && json.chain) {
+        const prevCurrent = this.chainCurrent;
+        this.chainCurrent = json.chain.current || 0;
+        this.chainMax = json.chain.max || 0;
+        this.chainTimeout = json.chain.timeout || 0;
+        this.checkChainBonuses(prevCurrent);
+      } else {
+        console.error('Chain API error:', json?.error);
+        OdinState.logError(new Error('Chain API error: ' + JSON.stringify(json?.error)));
+        this.chainCurrent = 0;
+        this.chainMax = 0;
+        this.chainTimeout = 0;
+        this.nearBonusTriggered20 = false;
+        this.nearBonusTriggered10 = false;
+        this.triggeredBonuses.clear();
+        this.lastBonusNotifications = {};
       }
-      retries++;
-      if (retries < maxRetries) await Utils.sleep(2000 * retries);
+    } catch (e) {
+      console.error('Chain fetch error:', e);
+      OdinState.logError(e);
     }
-    // Only reset if all retries fail
-    console.error('Chain API failed after retries; resetting state.');
-    this.chainCurrent = 0;
-    this.chainMax = 0;
-    this.chainTimeout = 0;
-    this.nearBonusTriggered20 = false;
-    this.nearBonusTriggered10 = false;
-    this.triggeredBonuses.clear();
-    this.lastBonusNotifications = {};
 
     const hasChain = this.chainTimeout > 0;
 
@@ -2571,10 +2523,8 @@ class OdinUserInterface extends BaseModule {
       if (this.button) {
         this.clampButtonPosition(this.button);
       }
-      // PATCH: Debounce and call setStickyTops on resize for better sticky handling
-      setTimeout(() => this.setStickyTops(), 100);
     };
-    window.addEventListener('resize', Utils.debounce(resizeListener, 300));
+    window.addEventListener('resize', resizeListener);
 
     button.addEventListener('click', async (e) => {
       e.preventDefault();
@@ -3210,18 +3160,12 @@ class OdinUserInterface extends BaseModule {
     importFile.addEventListener('change', e => {
       const file = e.target.files[0];
       if (file) {
-        // PATCH: Added size check for security/performance
-        if (file.size > 1e6) { // 1MB limit
-          alert('File too large (max 1MB).');
-          return;
-        }
         const reader = new FileReader();
         reader.onload = ev => {
           const backup = [...this.state.targets];
           try {
             const imported = JSON.parse(ev.target.result);
             if (!Array.isArray(imported)) throw new Error('Invalid format: not an array');
-            if (imported.length > 1000) throw new Error('File too large (max 1000 targets)'); // Additional limit
             imported.forEach(t => {
               if (typeof t.id !== 'number' || typeof t.name !== 'string' || typeof t.lvl !== 'number' || typeof t.status_until !== 'number' || (typeof t.respectGain !== 'number' && t.respectGain !== null) || typeof t.lastUpdate !== 'number') {
                 throw new Error('Invalid target format');
@@ -3276,18 +3220,12 @@ class OdinUserInterface extends BaseModule {
     importFile.addEventListener('change', e => {
       const file = e.target.files[0];
       if (file) {
-        // PATCH: Added size check for security/performance
-        if (file.size > 1e6) { // 1MB limit
-          alert('File too large (max 1MB).');
-          return;
-        }
         const reader = new FileReader();
         reader.onload = ev => {
           const backup = [...this.state.warTargets];
           try {
             const imported = JSON.parse(ev.target.result);
             if (!Array.isArray(imported)) throw new Error('Invalid format: not an array');
-            if (imported.length > 1000) throw new Error('File too large (max 1000 targets)'); // Additional limit
             imported.forEach(t => {
               if (typeof t.id !== 'number' || typeof t.name !== 'string' || typeof t.lvl !== 'number' || typeof t.status_until !== 'number' || (typeof t.respectGain !== 'number' && t.respectGain !== null) || typeof t.lastUpdate !== 'number') {
                 throw new Error('Invalid target format');
@@ -3355,18 +3293,12 @@ class OdinUserInterface extends BaseModule {
     importFile.addEventListener('change', e => {
       const file = e.target.files[0];
       if (file) {
-        // PATCH: Added size check for security/performance
-        if (file.size > 1e6) { // 1MB limit
-          alert('File too large (max 1MB).');
-          return;
-        }
         const reader = new FileReader();
         reader.onload = ev => {
           const backup = {...this.state.enemyFactions};
           try {
             const imported = JSON.parse(ev.target.result);
             if (typeof imported !== 'object' || imported === null) throw new Error('Invalid format: not an object');
-            if (Object.keys(imported).length > 100) throw new Error('Too many factions (max 100)'); // Limit
             Object.values(imported).forEach(f => {
               if (!f.members || typeof f.members !== 'object' || typeof f.name !== 'string') throw new Error('Invalid faction format');
             });
@@ -3955,10 +3887,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
         if (key) {
           const userJson = await BaseModule._apiModule.checkKeyValidity(key);
           if (userJson) {
-            // PATCH: Set apiKeyIsValid only after successful validation
-            BaseModule._apiModule.apiKeyIsValid = true;
             try {
-              this.state.settings.apiKey = key;
               this.state.settings.lastPromptTime = Date.now();
               await this.state.saveToIDB();
               modal.parentNode.removeChild(modal);
@@ -3967,7 +3896,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
             } catch (e) {
               console.error("Error saving settings after API key entry:", e);
               alert("API key accepted, but error saving settings: " + e.message + ". Please reload and try again.");
-              resolve(key); // Still resolve to allow usage
+              resolve(null);
             }
           } else {
             alert("Invalid API key. Please try again.");
@@ -3985,7 +3914,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
 
       modal.querySelector('#odin-api-btn-wait').addEventListener('click', () => {
         this.state.settings.lastPromptTime = Date.now();
-        await this.state.saveToIDB(); // PATCH: Save lastPromptTime only on skip/valid
+        this.state.saveToIDB();
         modal.parentNode.removeChild(modal);
         resolve(null);
       });
