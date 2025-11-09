@@ -80,35 +80,25 @@ async function setToDB(storeName, key, value) {
     const transaction = db.transaction([storeName], "readwrite");
     const store = transaction.objectStore(storeName);
     const request = store.put({ key, value });
-    request.onerror = async (event) => {
+    request.onerror = (event) => {
       if (event.target.error.name === 'QuotaExceededError') {
         GM_notification("Storage full - attempting to clear cache.");
-        try {
-          await clearStore('cache');
+        clearStore('cache').then(() => {
           const retryRequest = store.put({ key, value });
-          await new Promise((res, rej) => {
-            retryRequest.onsuccess = () => res();
-            retryRequest.onerror = (e) => rej(e);
-          });
-          resolve();
-        } catch (retryErr) {
-          if (retryErr.name === 'QuotaExceededError') {
-            GM_notification("Storage still full - clearing all stores.");
-            try {
-              await clearAllStores();
-              const finalRetry = store.put({ key, value });
-              await new Promise((res, rej) => {
-                finalRetry.onsuccess = () => res();
-                finalRetry.onerror = (e) => rej(e);
-              });
-              resolve();
-            } catch (finalErr) {
-              reject("Final put error: " + (finalErr.target ? finalErr.target.error.message : "Unknown"));
+          retryRequest.onsuccess = () => resolve();
+          retryRequest.onerror = (event) => {
+            if (event.target.error.name === 'QuotaExceededError') {
+              GM_notification("Storage still full - clearing all stores.");
+              clearAllStores().then(() => {
+                const finalRetry = store.put({ key, value });
+                finalRetry.onsuccess = () => resolve();
+                finalRetry.onerror = (event) => reject("Final put error: " + (event.target.error ? event.target.error.message : "Unknown"));
+              }).catch(() => reject("Failed to clear all stores."));
+            } else {
+              reject("Put error: " + (event.target.error ? event.target.error.message : "Unknown"));
             }
-          } else {
-            reject("Put error: " + (retryErr.target ? retryErr.target.error.message : "Unknown"));
-          }
-        }
+          };
+        }).catch(() => reject("Failed to clear cache."));
       } else {
         reject("Put error: " + (event.target.error ? event.target.error.message : "Unknown"));
       }
@@ -884,7 +874,7 @@ class Utils {
   }
 
   static formatTime(seconds, alternateFormat = false) {
-    seconds = Math.max(0, seconds);
+    seconds = Math.max(0, Math.floor(seconds));
 
     let hours = Math.floor(seconds / 3600);
     seconds -= hours * 3600;
@@ -945,63 +935,67 @@ class AjaxModule {
 
   _overrideXhr() {
     let base = this;
-    const originalXHR = window.XMLHttpRequest;
-    window.XMLHttpRequest = function() {
-      let result = new originalXHR(...arguments);
-      let stub;
 
-      result.addEventListener("readystatechange", function() {
-        if(this.readyState == 4 && ["", "text", "json"].includes(this.responseType) && this.responseText.trimStart()[0] == "{") {
-          try {
-            let json = JSON.parse(this.responseText);
-            stub = base._runAjaxCallbacks(this.responseURL, false, json);
-            if(stub) {
-              Object.defineProperty(this, "responseText", {
-                get: function(){return JSON.stringify(stub)}
-              });
-              if (this.responseType === "json" || this.responseType === "") {
-                Object.defineProperty(this, "response", {
-                  get: function(){return stub}
+    (function(original) {
+      window.XMLHttpRequest = function() {
+        let result = new original(...arguments);
+        let stub;
+
+        result.addEventListener("readystatechange", function() {
+          if(this.readyState == 4 && ["", "text", "json"].includes(this.responseType) && this.responseText.trimStart()[0] == "{") {
+            try {
+              let json = JSON.parse(this.responseText);
+              stub = base._runAjaxCallbacks(this.responseURL, false, json);
+              if(stub) {
+                Object.defineProperty(this, "responseText", {
+                  get: function(){return JSON.stringify(stub)}
                 });
+                if (this.responseType === "json" || this.responseType === "") {
+                  Object.defineProperty(this, "response", {
+                    get: function(){return stub}
+                  });
+                }
               }
+            } catch(e) {
+              console.error("Failed to parse XHR response for URL " + this.responseURL, e);
             }
-          } catch(e) {
-            console.error("Failed to parse XHR response for URL " + this.responseURL, e);
           }
-        }
-      });
+        });
 
-      return result;
-    };
-    window.XMLHttpRequest.prototype = originalXHR.prototype;
+        return result;
+      };
+      window.XMLHttpRequest.prototype = original.prototype;
+    })(window.XMLHttpRequest);
   }
 
   _overrideFetch() {
     let base = this;
-    const originalFetch = window.fetch;
-    window.fetch = async function() {
-      let url = arguments[0];
-      if(!url.includes("page.php?sid=bhc")) {
-        let preCall = base._runAjaxCallbacks(url, true);
-        if(preCall){return new Response(JSON.stringify(preCall))};
-        let result = await originalFetch.apply(this, arguments);
-        const contentType = result.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          try {
-            let json = await result.clone().json();
-            let stub = base._runAjaxCallbacks(url, false, json);
-            return stub ? new Response(JSON.stringify(stub)) : result;
-          } catch(e) {
-            console.error("Failed to parse fetch response for URL " + url, e);
+
+    (function(original) {
+      window.fetch = async function() {
+        let url = arguments[0];
+        if(!url.includes("page.php?sid=bhc")) {
+          let preCall = base._runAjaxCallbacks(url, true);
+          if(preCall){return new Response(JSON.stringify(preCall))};
+          let result = await original.apply(this, arguments);
+          const contentType = result.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            try {
+              let json = await result.clone().json();
+              let stub = base._runAjaxCallbacks(url, false, json);
+              return stub ? new Response(JSON.stringify(stub)) : result;
+            } catch(e) {
+              console.error("Failed to parse fetch response for URL " + url, e);
+              return result;
+            }
+          } else {
             return result;
           }
         } else {
-          return result;
+          return await original.apply(this, arguments);
         }
-      } else {
-        return await originalFetch.apply(this, arguments);
-      }
-    };
+      };
+    })(window.fetch);
   }
 
   _runAjaxCallbacks(url, abortCall, json) {
@@ -1020,11 +1014,10 @@ class AjaxModule {
 }
 
 class ApiQueue {
-  constructor(concurrency = 1) {
+  constructor(concurrency = 3) {
     this.queue = [];
     this.running = 0;
     this.concurrency = concurrency;
-    this.lastRun = 0;
   }
 
   add(task, priority = 4) {
@@ -1036,15 +1029,7 @@ class ApiQueue {
   }
 
   async process() {
-    const now = Date.now();
     if (this.running >= this.concurrency || this.queue.length === 0) return;
-    
-    if (now - this.lastRun < 500) {
-      setTimeout(() => this.process(), 500 - (now - this.lastRun));
-      return;
-    }
-    
-    this.lastRun = now;
     this.running++;
     const {task, resolve, reject} = this.queue.shift();
     try {
@@ -1061,7 +1046,7 @@ class ApiQueue {
 class ApiModule {
   constructor() {
     this.state = null;
-    this.apiQueue = new ApiQueue(1);
+    this.apiQueue = new ApiQueue(3);
     this.cacheLog = {};
     this.maxCacheSize = 200;
     this.apiKeyIsValid = false;
@@ -1551,10 +1536,6 @@ class OdinLogic extends BaseModule {
 
   async fetchServerTime() {
     if (!this.isPageVisible) return;
-    if (!BaseModule._apiModule.apiKey) {
-      await this.fetchWorldTimeFallback();
-      return;
-    }
     let retries = 0;
     const maxRetries = 3;
     while (retries < maxRetries) {
@@ -1578,10 +1559,6 @@ class OdinLogic extends BaseModule {
       retries++;
       await Utils.sleep(1000 * Math.pow(2, retries));
     }
-    await this.fetchWorldTimeFallback();
-  }
-
-  async fetchWorldTimeFallback() {
     try {
       const local_t1 = Date.now();
       const response = await new Promise((resolve, reject) => {
@@ -1759,10 +1736,6 @@ class OdinLogic extends BaseModule {
         await deleteFromDB('cache', url);
       }
       let profile = await this.api(`/user/${target.id}?selections=profile`, force ? 0 : 30000);
-      if (!profile || profile.error) {
-        target.name = `Error (ID: ${target.id})`;
-        return;
-      }
       if (profile.error && profile.error.code === 14) {
         if (!BaseModule._apiModule.alertedPermission) {
           alert('API key lacks access to user profile. Please ensure full access or add "user" permission.');
@@ -1788,6 +1761,9 @@ class OdinLogic extends BaseModule {
         target.name = 'Error fetching name';
         return;
       }
+      if (typeof profile !== 'object' || !profile) {
+        throw new Error('Invalid profile response');
+      }
       if (!profile.name) {
         console.log('Missing name in response for ID ' + target.id, profile);
         target.name = 'Unidentified (ID: ' + target.id + ')';
@@ -1799,13 +1775,13 @@ class OdinLogic extends BaseModule {
         respectGain = this.state.attackLog[target.id].respect_gain;
       }
       target.lvl = profile.level;
-      target.faction = profile.faction?.faction_name || 'N/A';
-      target.faction_id = profile.faction?.faction_id || 0;
-      target.status = profile.status?.state || 'N/A';
-      target.status_description = profile.status?.description || '';
-      target.status_until = profile.status?.until || 0;
-      target.life = (profile.life?.current || 'N/A') + '/' + (profile.life?.maximum || 'N/A');
-      target.lastAction = profile.last_action?.relative || 'N/A';
+      target.faction = profile.faction.faction_name;
+      target.faction_id = profile.faction.faction_id;
+      target.status = profile.status.state;
+      target.status_description = profile.status.description;
+      target.status_until = profile.status.until || 0;
+      target.life = profile.life.current + '/' + profile.life.maximum;
+      target.lastAction = profile.last_action.relative;
       target.respectGain = respectGain;
       target.lastUpdate = Date.now();
     } catch (e) {
@@ -1919,7 +1895,7 @@ class OdinLogic extends BaseModule {
     this.lastEnemyOnlineCheck = now;
     let onlineCount = 0;
     for (const faction of Object.values(this.state.enemyFactions)) {
-      onlineCount += Object.values(faction.members).filter(m => m.last_action.status === 'Online').length;
+      onlineCount += Object.values(faction.members).filter(m => m.last_action.status === 'Online' || m.last_action.status === 'Idle').length;
     }
     if (onlineCount >= this.enemyOnlineThreshold && now - this.lastEnemyOnlineNotification > 600000) {
       GM_notification(`Alert: ${onlineCount} enemy members online!`);
@@ -1935,9 +1911,6 @@ class OdinLogic extends BaseModule {
       if (!isNaN(profileId)) {
         try {
           let profile = await this.api(`/user/${profileId}?selections=profile`);
-          if (!profile || profile.error) {
-            profile = { name: `Error (ID: ${profileId})`, level: 'N/A', faction: { faction_name: 'N/A', faction_id: 0 }, status: { state: 'N/A', description: '' }, life: { current: 'N/A', maximum: 'N/A' }, last_action: { relative: 'N/A' } };
-          }
           if (profile.error && profile.error.code === 14) {
             if (!BaseModule._apiModule.alertedPermission) {
               alert('API key lacks access to user profile. Please ensure full access or add "user" permission.');
@@ -1964,7 +1937,15 @@ class OdinLogic extends BaseModule {
             style: 'display: flex; gap: 10px; margin-left: calc(10px + 3vw); align-items: center;'
           });
 
-          actionDrawer.insertAdjacentElement('afterbegin', container);
+          const personalStatsLi = Array.from(actionDrawer.querySelectorAll('li')).find(li =>
+            li.textContent.includes('Personal Stats') ||
+            (li.querySelector('a') && li.querySelector('a').textContent.trim() === 'Personal Stats')
+          );
+          if (personalStatsLi && personalStatsLi.nextSibling) {
+            actionDrawer.insertBefore(container, personalStatsLi.nextSibling);
+          } else {
+            actionDrawer.appendChild(container);
+          }
 
           const targetBtn = GM_addElement(container, 'button', {
             class: 'odin-profile-btn',
@@ -2062,7 +2043,6 @@ class OdinLogic extends BaseModule {
     this.nearBonusTriggered20 = false;
     this.nearBonusTriggered10 = false;
     this.triggeredBonuses.clear();
-    this.lastBonusNotifications = {};
     if (this.slowChainInterval) clearInterval(this.slowChainInterval);
     if (this.fastChainInterval) clearInterval(this.fastChainInterval);
     this.slowChainInterval = setInterval(() => this.watchChain(false), 60000);
@@ -2073,10 +2053,6 @@ class OdinLogic extends BaseModule {
     if (this.fastChainInterval) clearInterval(this.fastChainInterval);
     this.slowChainInterval = null;
     this.fastChainInterval = null;
-    this.nearBonusTriggered20 = false;
-    this.nearBonusTriggered10 = false;
-    this.triggeredBonuses.clear();
-    this.lastBonusNotifications = {};
     this.stopFlashing();
   }
 
@@ -2099,7 +2075,6 @@ class OdinLogic extends BaseModule {
         this.nearBonusTriggered20 = false;
         this.nearBonusTriggered10 = false;
         this.triggeredBonuses.clear();
-        this.lastBonusNotifications = {};
       }
     } catch (e) {
       console.error('Chain fetch error:', e);
@@ -2116,7 +2091,6 @@ class OdinLogic extends BaseModule {
       this.nearBonusTriggered20 = false;
       this.nearBonusTriggered10 = false;
       this.triggeredBonuses.clear();
-      this.lastBonusNotifications = {};
     }
 
     if (!this.alertEnabled) return;
@@ -2987,7 +2961,7 @@ class OdinUserInterface extends BaseModule {
     const btn = table.querySelector('.status-priority-btn');
     btn.dataset.mode = mode;
     btn.classList.add(mode === '0' ? 'green' : mode === '1' ? 'yellow' : 'red');
-    this.sortTable(table, sortCol, sortAsc, mode);
+    this.sortTable(table, sortCol, sortAsc);
     this.logic.startCountdownTimers();
     setTimeout(() => this.setStickyTops(), 10);
   }
@@ -3029,7 +3003,7 @@ class OdinUserInterface extends BaseModule {
       const sortCol = this.state.settings.enemy_sort_col;
       const sortAsc = this.state.settings.enemy_sort_asc;
       if (sortCol) {
-        this.sortTable(table, sortCol, sortAsc, mode);
+        this.sortTable(table, sortCol, sortAsc);
       }
     });
     this.logic.startCountdownTimers();
@@ -3077,8 +3051,7 @@ class OdinUserInterface extends BaseModule {
         const table = th.closest('table');
         const asc = th.dataset.asc !== 'true';
         th.dataset.asc = asc ? 'true' : 'false';
-        const mode = parseInt(table.querySelector('.status-priority-btn')?.dataset.mode || '0', 10);
-        this.sortTable(table, th.dataset.col, asc, mode);
+        this.sortTable(table, th.dataset.col, asc);
 
         if (table.id === 'members-table') {
           this.state.settings.members_sort_col = th.dataset.col;
@@ -3171,15 +3144,10 @@ class OdinUserInterface extends BaseModule {
                 throw new Error('Invalid target format');
               }
             });
-            const idMap = new Map();
-            [...this.state.targets, ...imported].forEach(t => {
-              if (!idMap.has(t.id) || idMap.get(t.id).lastUpdate < t.lastUpdate) {
-                idMap.set(t.id, t);
-              }
-            });
-            const deduped = Array.from(idMap.values());
+            const uniqueImported = imported.filter((t, i, arr) => arr.findIndex(tt => tt.id === t.id) === i);
+            const merged = [...this.state.targets, ...uniqueImported];
+            const deduped = merged.filter((t, i, arr) => arr.findIndex(tt => tt.id === t.id) === i);
             if (deduped.length > maxTargets) {
-              console.warn(`Import truncated to ${maxTargets} targets; ${deduped.length - maxTargets} lost due to limit.`);
               alert(`Import truncated to ${maxTargets} targets (max limit).`);
             }
             this.state.targets = deduped.slice(0, maxTargets);
@@ -3231,15 +3199,10 @@ class OdinUserInterface extends BaseModule {
                 throw new Error('Invalid target format');
               }
             });
-            const idMap = new Map();
-            [...this.state.warTargets, ...imported].forEach(t => {
-              if (!idMap.has(t.id) || idMap.get(t.id).lastUpdate < t.lastUpdate) {
-                idMap.set(t.id, t);
-              }
-            });
-            const deduped = Array.from(idMap.values());
+            const uniqueImported = imported.filter((t, i, arr) => arr.findIndex(tt => tt.id === t.id) === i);
+            const merged = [...this.state.warTargets, ...uniqueImported];
+            const deduped = merged.filter((t, i, arr) => arr.findIndex(tt => tt.id === t.id) === i);
             if (deduped.length > maxTargets) {
-              console.warn(`Import truncated to ${maxTargets} targets; ${deduped.length - maxTargets} lost due to limit.`);
               alert(`Import truncated to ${maxTargets} targets (max limit).`);
             }
             this.state.warTargets = deduped.slice(0, maxTargets);
@@ -3327,9 +3290,7 @@ class OdinUserInterface extends BaseModule {
         else if (mode === 1) button.classList.add('yellow');
         else button.classList.add('red');
         const table = button.closest('table');
-        const sortCol = table.id === 'members-table' ? this.state.settings.members_sort_col : this.state.settings.enemy_sort_col;
-        const sortAsc = table.id === 'members-table' ? this.state.settings.members_sort_asc : this.state.settings.enemy_sort_asc;
-        this.sortTable(table, sortCol || 'status_icon', false, mode);
+        this.sortTable(table, 'status_icon', false);
         if (table.id === 'members-table') {
           this.state.settings.members_status_mode = mode.toString();
           this.state.settings.members_sort_col = 'status_icon';
@@ -3444,7 +3405,7 @@ class OdinUserInterface extends BaseModule {
   <table id="members-table" class="responsive-table" style="margin-top: 0;">
     <thead>
       <tr>
-        <th data-col="status_icon"><button class="status-priority-btn status-btn green" data-mode="0" role="img" aria-label="Status Priority"></button></th>
+        <th data-col="status_icon"><button class="status-priority-btn status-btn green" data-mode="0"></button></th>
         <th data-col="name">Name</th>
         <th data-col="level">Level</th>
         <th data-col="position">Position</th>
@@ -3466,7 +3427,7 @@ class OdinUserInterface extends BaseModule {
           statusDisplay += ` - ${Utils.escapeHtml(member.status.description)}`;
         }
         return `<tr>
-          <td data-label=""><span class="status-icon ${statusClass}" role="img" aria-label="${statusClass}"></span></td>
+          <td data-label=""><span class="status-icon ${statusClass}"></span></td>
           <td data-label="Name"><a href="https://${window.location.host}/profiles.php?XID=${userId}">${Utils.escapeHtml(member.name)}</a></td>
           <td data-label="Level">${member.level}</td>
           <td data-label="Position">${Utils.escapeHtml(member.position)}</td>
@@ -3523,7 +3484,7 @@ ${Object.entries(this.state.enemyFactions).map(([factionId, data]) => {
       <table class="responsive-table enemy-members-table" style="margin-top: 0;">
         <thead>
           <tr>
-            <th data-col="status_icon"><button class="status-priority-btn status-btn green" data-mode="0" role="img" aria-label="Status Priority"></button></th>
+            <th data-col="status_icon"><button class="status-priority-btn status-btn green" data-mode="0"></button></th>
             <th data-col="name">Name</th>
             <th data-col="level">Level</th>
             <th data-col="position">Position</th>
@@ -3545,7 +3506,7 @@ ${Object.entries(this.state.enemyFactions).map(([factionId, data]) => {
               statusDisplay += ` - ${Utils.escapeHtml(member.status.description)}`;
             }
             return `<tr>
-              <td data-label=""><span class="status-icon ${statusClass}" role="img" aria-label="${statusClass}"></span></td>
+              <td data-label=""><span class="status-icon ${statusClass}"></span></td>
               <td data-label="Name"><a href="https://${window.location.host}/profiles.php?XID=${userId}">${Utils.escapeHtml(member.name)}</a></td>
               <td data-label="Level">${member.level}</td>
               <td data-label="Position">${Utils.escapeHtml(member.position)}</td>
@@ -3770,7 +3731,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
     return val;
   }
 
-  sortTable(table, col, asc = true, mode = 0) {
+  sortTable(table, col, asc = true) {
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.rows);
     const header = table.querySelector('thead tr');
@@ -3782,6 +3743,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
       let aVal, bVal;
 
       if (col === 'status_icon') {
+        const mode = parseInt(button ? button.dataset.mode : '0', 10);
         const aStatus = a.querySelector('.status-icon').classList[1];
         const bStatus = b.querySelector('.status-icon').classList[1];
         aVal = getStatusValue(aStatus, mode);
