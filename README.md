@@ -27,7 +27,8 @@ Choose from fun themes with neon effects, fonts, and colors.
 Works great on mobile with easy-to-read tables.
 
 How to Install
-Odin Tools works as a simple add-on in your browser. Just a few steps to get started.
+
+Odin Tools works as a simple add-on in your browser. 
 What You Need:
 Any modern browser like Chrome, Firefox, or Edge.
 The Tampermonkey add-on from tampermonkey.net.
