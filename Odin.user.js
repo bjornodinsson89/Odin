@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Odin Tools
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.0.1
 // @description  Faction Tools
 // @author       BjornOdinsson89
 // @match        https://www.torn.com/*
@@ -839,7 +839,7 @@ styleElement.textContent = `
     background-color: #303030;
     color: #ffffff;
     font-size: 16px;
-    width: 189px;
+    width: 50px;
     height: 63px;
     border-radius: 0;
     display: flex;
@@ -2281,7 +2281,7 @@ class OdinUserInterface extends BaseModule {
 
   clampButtonPosition(button) {
     const rect = button.getBoundingClientRect();
-    const buttonWidth = 189;
+    const buttonWidth = 50;
     let left = parseFloat(button.style.left);
     if (isNaN(left)) left = rect.left;
 
@@ -2358,6 +2358,16 @@ class OdinUserInterface extends BaseModule {
   }
 
   async renderOverlay() {
+    // Remove any existing overlay and button to prevent duplicates
+    const existingOverlay = document.getElementById('odin-overlay');
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+    const existingButton = document.getElementById('odin-floating-btn');
+    if (existingButton) {
+      existingButton.remove();
+    }
+
     const overlay = document.createElement('div');
     overlay.id = 'odin-overlay';
     overlay.style.position = 'fixed !important';
@@ -2525,6 +2535,7 @@ class OdinUserInterface extends BaseModule {
         } else {
           overlay.style.right = '0px';
         }
+        this.applyCustomStyles();
         await this.logic.startServerTimeFetch();
         this.renderContent(contentWrapper);
       }
@@ -2929,6 +2940,17 @@ class OdinUserInterface extends BaseModule {
             this.state.settings.linkColor = e.target.value;
             this.state.saveToIDB();
             this.applyCustomStyles();
+          });
+          sectionContent.querySelector('#change-api').addEventListener('click', async () => {
+            const newKey = await this.promptForApiKey(true);
+            if (newKey) {
+              this.state.settings.apiKey = newKey;
+              await this.state.saveToIDB();
+              BaseModule._apiModule.clearCache();
+              BaseModule._apiModule.apiKey = newKey;
+              BaseModule._apiModule.apiKeyIsValid = true;
+              alert('API key updated successfully.');
+            }
           });
         }
       });
@@ -3703,6 +3725,7 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
 <div class="settings-group">
   <h4>API & Cache Management</h4>
   <div class="button-group">
+    <button id="change-api">Change API Key</button>
     <button id="clear-cache">Clear Cache</button>
   </div>
 </div>
@@ -3827,10 +3850,12 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
     return new Promise((resolve) => {
       const modal = document.createElement('div');
       modal.id = 'odin-api-modal';
+      const title = force ? 'Change Odin Tools API Key' : 'Odin Tools API Key Required';
       modal.innerHTML = `
         <div id="odin-api-modal-content">
-          <h3>Odin Tools API Key Required</h3>
+          <h3>${title}</h3>
           <p>Enter your Torn API key with full access. This key is stored locally.</p>
+          <p>This API key is stored locally in your browser and Odin does not communicate outside of Torn servers.</p>
           <input type="text" id="odin-api-input" placeholder="Enter API Key">
           <div id="odin-api-buttons">
             <button id="odin-api-btn-enter">Enter</button>
@@ -3853,7 +3878,11 @@ ${Object.keys(this.state.enemyFactions).length === 0 ? '<p>No enemy factions add
               this.state.settings.lastPromptTime = Date.now();
               await this.state.saveToIDB();
               modal.parentNode.removeChild(modal);
-              alert(`Welcome ${userJson.name}${userJson.faction ? ', ' + userJson.faction.position + ' of ' + userJson.faction.faction_name : ''}`);
+              if (force) {
+                alert('API key updated successfully.');
+              } else {
+                alert(`Welcome ${userJson.name}${userJson.faction ? ', ' + userJson.faction.position + ' of ' + userJson.faction.faction_name : ''}`);
+              }
               resolve(key);
             } catch (e) {
               console.error("Error saving settings after API key entry:", e);
