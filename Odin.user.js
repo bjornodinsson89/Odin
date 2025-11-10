@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Odin Tools
-// déchetsnamespace    http://tampermonkey.net/
+// @namespace    http://tampermonkey.net/
 // @version      2.2
 // @description  Faction Tools
 // @author       BjornOdinsson89
