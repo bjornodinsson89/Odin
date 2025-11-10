@@ -117,7 +117,6 @@ The \`Odin.user.js\` file is organized with JSDoc headers and bullet-point comme
 - **API Handling**: Queue, throttling, caching in \`ApiModule\`.
 - **Core Classes**: \`OdinState\` (DB), \`OdinLogic\` (polling/events), \`OdinUserInterface\` (rendering).
 
-For full annotated code, view [Odin.user.js](Odin.user.js) in the repo.
 
 ## Changelog
 
