@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Odin Tools
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Faction Tools
 // @author       BjornOdinsson89
 // @match        https://www.torn.com/*
