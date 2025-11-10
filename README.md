@@ -41,7 +41,7 @@ Features are tabbed for easy navigation, with persistent state across sessions.
 3. Alternatively, clone the repo and load \`Odin.user.js\` manually in Tampermonkey.
 4. Reload Torn City – a floating Odin button appears (bottom-left by default). Click to open.
 5. Enter your Fill access Torn API key on first run (see [API Handling](#api-handling))
-##Your API never leaves your Browser, or Torn servers, Odin Tools is designed specifically to only communicate within Torn and does not send API data to any any outside source##
+##Your API never leaves your Browser, or Torn servers, Odin Tools is designed specifically to only communicate within Torn, and does not send API data to any outside source.
 
 ## Configuration
 
@@ -123,8 +123,6 @@ The \`Odin.user.js\` file is organized with JSDoc headers and bullet-point comme
 - **v2.0** (2025-11-09): IndexedDB, enemy wars, chain bonuses, resizer, fonts/neon.
 - **v1.0** (2025-10-15): Basic targets/members/API.
 
-Full: [CHANGELOG.md](CHANGELOG.md).
-
 ## License
 
 MIT - [LICENSE](LICENSE).
@@ -132,9 +130,3 @@ MIT - [LICENSE](LICENSE).
 ---
 
 **Hail Odin!** Questions? Message BiornOdinsson89 in Torn or open an issue.
-
-/**
- * Exports the README content.
- * @type {string}
- */
-module.exports = README_CONTENT;
